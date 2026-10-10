@@ -1,0 +1,154 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YouTube Live Game</title>
+<style>
+body{margin:0;background:#101426;color:white;font-family:Arial;text-align:center}
+header{padding:20px;background:#1b2440}
+input,button{padding:12px;margin:5px;border-radius:8px;border:0}
+button{background:#20e3b2;font-weight:bold;cursor:pointer}
+#game{height:350px;position:relative;overflow:hidden;margin:15px;background:linear-gradient(#182c52 70%,#315c42 70%);border:2px solid #20e3b2;border-radius:12px}
+#enemy{position:absolute;left:12%;bottom:25px;font-size:55px;transition:left .2s,bottom .2s}
+#name{position:absolute;left:12%;bottom:95px;background:#111;padding:8px;border-radius:8px;transform:translateX(-20%)}
+#status{color:#20e3b2}
+li{margin:8px}
+</style>
+</head>
+<body>
+<header>
+<h1>🎮 LIVE CHAT GAME</h1>
+<p>!left | !right | !jump | !reset</p>
+</header>
+
+<div>
+<input id="video" placeholder="YouTube Live Video ID">
+<input id="key" placeholder="API key" value="AIzaSyBMB-QBxzbwLTo7Wu0w99wePLo6I-Qwgd8">
+<button onclick="connect()">CONNECT LIVE</button>
+<p id="status">Not connected</p>
+</div>
+
+<div id="game">
+<div id="name">Waiting for viewer...</div>
+<div id="enemy">👾</div>
+</div>
+
+<h3>Recent commands</h3>
+<ul id="feed"></ul>
+
+<script>
+const enemy=document.getElementById("enemy");
+const nameTag=document.getElementById("name");
+const statusBox=document.getElementById("status");
+const feed=document.getElementById("feed");
+
+let x=12, pageToken="", timer=null, stopped=true;
+let seen=new Set();
+
+function move(command,username){
+  if(command==="!left") x=Math.max(2,x-7);
+  else if(command==="!right") x=Math.min(88,x+7);
+  else if(command==="!jump"){
+    enemy.style.bottom="120px";
+    setTimeout(()=>enemy.style.bottom="25px",650);
+  }
+  else if(command==="!reset"){
+    x=12;
+    enemy.style.bottom="25px";
+  }
+  else return;
+
+  enemy.style.left=x+"%";
+  nameTag.style.left=x+"%";
+  nameTag.textContent=username+" • "+command;
+
+  const li=document.createElement("li");
+  li.textContent=username+": "+command;
+  feed.prepend(li);
+  while(feed.children.length>20) feed.lastElementChild.remove();
+}
+
+async function requestApi(endpoint,params){
+  const url=new URL("https://www.googleapis.com/youtube/v3/"+endpoint);
+  Object.entries(params).forEach(([k,v])=>url.searchParams.set(k,v));
+  const response=await fetch(url);
+  const data=await response.json();
+  if(!response.ok) throw Error(data.error?.message||"API request failed");
+  return data;
+}
+
+async function connect(){
+  clearTimeout(timer);
+  stopped=true;
+  pageToken="";
+  seen.clear();
+
+  const videoId=document.getElementById("video").value.trim();
+  const apiKey=document.getElementById("key").value.trim();
+
+  if(!videoId||!apiKey){
+    statusBox.textContent="Enter video ID and API key.";
+    return;
+  }
+
+  statusBox.textContent="Connecting...";
+  try{
+    const data=await requestApi("videos",{
+      part:"liveStreamingDetails",
+      id:videoId,
+      key:apiKey
+    });
+
+    const chatId=data.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
+    if(!chatId) throw Error("No active live chat found. Check the video ID and live status.");
+
+    stopped=false;
+    await poll(apiKey,chatId);
+  }catch(error){
+    statusBox.textContent="Error: "+error.message;
+  }
+}
+
+async function poll(apiKey,chatId){
+  if(stopped)return;
+
+  try{
+    const params={
+      part:"snippet,authorDetails",
+      liveChatId:chatId,
+      maxResults:200,
+      key:apiKey
+    };
+    if(pageToken) params.pageToken=pageToken;
+
+    const data=await requestApi("liveChat/messages",params);
+    pageToken=data.nextPageToken||pageToken;
+
+    for(const item of data.items||[]){
+      if(seen.has(item.id))continue;
+      seen.add(item.id);
+
+      const message=(item.snippet?.displayMessage||"").trim();
+      const match=message.match(/^!(left|right|jump|reset)\b/i);
+
+      if(match){
+        move("!"+match[1].toLowerCase(),
+          item.authorDetails?.displayName||"Viewer");
+      }
+    }
+
+    statusBox.textContent="🟢 Connected to YouTube Live";
+    timer=setTimeout(
+      ()=>poll(apiKey,chatId),
+      Math.max(5000,data.pollingIntervalMillis||5000)
+    );
+  }catch(error){
+    statusBox.textContent="Chat error: "+error.message;
+    timer=setTimeout(()=>poll(apiKey,chatId),12000);
+  }
+}
+</script>
+</body>
+</html>
